@@ -18,7 +18,6 @@ I really coded this for myself, but perhaps it's useful for others, so, this is 
 
 ![This](images/demo.gif "Logo Title Text 1")
 
-
 ## Settings
 
 ### Logfile line format
