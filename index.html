@@ -1,0 +1,243 @@
+<!doctype html>
+<html>
+
+<head>
+    <title>Timeline logviewer</title>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css?family=Fira+Sans:200,300" rel="stylesheet">
+
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis.min.js"></script>
+    <script type="text/javascript" src="/socket.io/socket.io.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/vis/4.21.0/vis-timeline-graph2d.min.css" rel="stylesheet" type="text/css"
+    />
+
+    <style>
+        body,
+        html {
+            font-family: 'Fira Sans', Arial, Helvetica, sans-serif;
+            font-size: 11pt;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+
+        div.vis-tooltip {
+            font-family: 'Fira Sans', Arial, Helvetica, sans-serif;
+        }
+
+        pre {
+            font-size: 0.7em;
+            margin: 0;
+        }
+
+        #visualization {
+            height: 100%;
+        }
+
+        .vis-item.vis-background.period-a {
+            background-color: #fef0d9;
+        }
+
+        .vis-item.vis-background.period-b {
+            background-color: #fdd49e;
+        }
+
+        .vis-item.vis-background.period-c {
+            background-color: #fdbb84;
+        }
+
+        .vis-item.vis-background.period-d {
+            background-color: #fc8d59;
+        }
+
+        .vis-item.vis-background.period-e {
+            background-color: #e34a33;
+        }
+
+        .vis-item.vis-background.period-f {
+            background-color: #b30000;
+        }
+
+        .vis-item {
+            font-size: .8em;
+        }
+
+        .vis-item.vis-range {
+            background-color: #d9f0a3;
+        }
+
+        .vis-item.vis-box {
+            border-style: dotted;
+            border-left-style: solid;
+        }
+
+        .vis-item .vis-item-content {
+            padding: 2px 5px;
+        }
+    </style>
+
+</head>
+
+<body>
+    <div id="visualization"></div>
+
+    <script>
+        // Logfile format configuration
+        const loglineParser = new RegExp(/\[(.+?)\]\s\[(.+?)\]\s(.*)/)
+
+        // Dataset configuration
+        const items = new vis.DataSet([]);
+        const groups = new vis.DataSet([]);
+
+        const container = document.getElementById('visualization');
+        const options = {
+            start: new Date().toISOString().replace('T', ' ').substring(0, 17) + '00',
+            end: new Date().toISOString().replace('T', ' ').substring(0, 17) + '59',
+            editable: false,
+            timeAxis: { scale: 'second', step: 1 },
+            align: 'left',
+            height: '100%',
+            zoomMax: 1000 * 60,
+            zoomMin: 1,
+            orientation: 'top'
+        };
+
+        const timeline = new vis.Timeline(container, items, groups, options);
+
+        // Rules to preprocess log lines
+        const rules = [basicDataMatcher, tooltipSplit, pointTypeProcessor, pairLineProcessor]
+
+        function basicDataMatcher(data) {
+            const match = data.line.match(loglineParser)
+            let item;
+
+            if (match) {
+                item = {
+                    id: data.id,
+                    group: parseInt(match[1]),
+                    start: match[2],
+                    content: match[3]
+                }
+            } else {
+                item = {
+                    id: data.id,
+                    group: 'Main',
+                    start: new Date().toISOString().replace('T', ' ').replace('Z', ''),
+                    content: data.line
+                }
+            }
+
+            return {
+                op: 'add',
+                item: item
+            }
+        }
+
+        function prefixCurrentDateToStart(itemOperation) {
+            const item = itemOperation.item
+            item.start = new Date().toISOString().replace('T', ' ').substring(0, 14) + item.start
+            return itemOperation
+        }
+
+        const tooltipSeparator = '|'
+        function tooltipSplit(itemOperation) {
+            if (!tooltipSeparator) {
+                return itemOperation
+            }
+
+            const item = itemOperation.item
+            const position = item.content.indexOf(tooltipSeparator)
+
+            if (position > -1) {
+                item.original_content = item.content
+                item.content = item.original_content.substring(0, position)
+                item.title = item.original_content.substring(position + 1)
+            }
+
+            return itemOperation
+        }
+
+        // Period matching support
+        let periods = 0
+        const periodClassNames = ['period-a', 'period-b', 'period-c', 'period-d', 'period-e', 'period-f']
+        const pairIdMap = {}
+        const pairLinesRegex = new RegExp(/\((BEGIN|END)\=(.+?)\)(.*)/)
+
+        function pairLineProcessor(itemOperation) {
+            const item = itemOperation.item
+            const content = item.original_content || item.content
+            const pairMatch = content.match(pairLinesRegex)
+
+            if (!pairMatch) {
+                return itemOperation
+            }
+
+            const pairId = pairMatch[2]
+            if (pairMatch[1] == 'BEGIN') {
+                pairIdMap[pairId] = item.id
+                item.title = item.content = pairMatch[3]
+            } else if (pairMatch[1] == 'END' && pairId in pairIdMap) {
+                periods++;
+                const startItemId = pairIdMap[pairId]
+                let startItem = items.get(startItemId)
+
+                if (startItem) {
+                    totalTime = new Date(item.start) - new Date(startItem.start)
+                    startItem.end = item.start;
+                    startItem.title += '<br>' + pairMatch[3] + ' (' + totalTime + 'ms)';
+                    startItem.type = 'range';
+                    startItem.className = periodClassNames[(periods - 1) % periodClassNames.length]
+
+                    itemOperation.op = 'update'
+                    itemOperation.item = startItem
+                } else {
+                    console.log('Could not find start item: ' + startItemId)
+                }
+            }
+            return itemOperation
+        }
+
+        function pointTypeProcessor(itemOperation) {
+            let item = itemOperation.item
+            if (item.content.startsWith('*')) {
+                item.content = item.content.substring(1).trim()
+                item.type = 'point'
+            }
+            return itemOperation
+        }
+
+        // Socket.io thingz
+        const socket = io('/');
+        const urlParams = new URLSearchParams(window.location.search);
+        socket.on('add-data', function (itemOperation) {
+            for (let rule of rules) {
+                itemOperation = rule(itemOperation)
+            }
+            let item = itemOperation.item
+
+            if (!groups.getIds().includes(item.group)) {
+                groups.add({ id: item.group, content: 'Thread ' + item.group })
+            }
+
+            if (itemOperation.op == 'add') {
+                items.add(item)
+
+                if (!urlParams.has('no-follow')) {
+                    timeline.focus([item.id], { animation: { duration: 30, easingFunction: 'linear' } })
+                }
+            } else if (itemOperation.op == 'update') {
+                items.update(item)
+            }
+        })
+        if (urlParams.has('file')) {
+            socket.emit('start', { logfile:  urlParams.get('file') })
+        } else {
+            alert('No file specified, append the filename you want to tail to this URL, eg. ' + window.location.origin + '?file=/users/johnnycash/secrets.log')
+        }
+
+    </script>
+</body>
+
+</html>
