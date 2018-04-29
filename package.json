@@ -1,0 +1,16 @@
+{
+  "name": "timeline-logview",
+  "version": "1.0.0",
+  "description": "Ridiculously simple timeline logfile viewer",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "author": "Gonzalo Casas <casas@arch.ethz.ch>",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.16.3",
+    "socket.io": "^2.1.0",
+    "tail": "^1.2.3"
+  }
+}
